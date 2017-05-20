@@ -38,10 +38,10 @@ void DetectRegions();
 void DrawBoundingBoxes();
 void ChangeDetection();
 void CreateYCbCr();
+void DetectObjectsColor(uint8 * ObjectColors);
 
 void ResetProcess()
 {
-	memcpy(data.u8TempImage[BACKGROUND], data.u8TempImage[SENSORIMG], IMG_SIZE); // set new BACKGROUND
 	//called when "reset" button is pressed
 	if(ManualThreshold == false)
 		ManualThreshold = true;
@@ -53,7 +53,6 @@ void ResetProcess()
 void ProcessFrame() {
 	//initialize counters
 	if(data.ipc.state.nStepCounter == 1) {
-		//memcpy(data.u8TempImage[BACKGROUND], data.u8TempImage[SENSORIMG], IMG_SIZE); // first picture is our BACKGROUND
 		ManualThreshold = false;
 	} else {
 		CreateYCbCr();
@@ -87,6 +86,15 @@ void ChangeDetection() {
 	int r, c, frg, p;
 	memset(data.u8TempImage[INDEX0], 0, IMG_SIZE);
 	memset(data.u8TempImage[BACKGROUND], 0, IMG_SIZE);
+
+	for(r = 0; r < nr*nc; r += nc) {
+		for(c = 0; c < nc; c++) {
+			for(p = 0; p < NUM_COLORS; p++) {
+				data.u8TempImage[INDEX1][(r+c)*p] = 0;
+			}
+		}
+	}
+
 	//loop over the rows
 	for(r = 0; r < nr*nc; r += nc) {
 		//loop over the columns
@@ -259,19 +267,87 @@ void DetectRegions() {
 	OscVisGetRegionProperties( &ImgRegions);
 }
 
+/*
+ * @param: ObjectColors is a pointer to an array with size of #objects
+ * We evaluate the color of these objects and save the values to this array.
+ * */
+void DetectObjectsColor(uint8 * ObjectsColor){
+	uint16 o, c, p;
+
+	//loop over objects
+	for(o = 0; o < ImgRegions.noOfObjects; o++) {
+		//get pointer to root run of current object
+		struct OSC_VIS_REGIONS_RUN* currentRun = ImgRegions.objects[o].root;
+
+		uint32 Hist[256][NUM_COLORS];
+		for (int i = 0; i < 256; i++){
+			for (int j = 0; j < 3; j++){
+				Hist[i][j] = 0;
+			}
+		}
+		uint32 num[3];
+		for (int i = 0; i < 3; i++){
+			num[i] = 0;
+		}
+
+		//loop over runs of current object
+		do {
+			//loop over pixel of current run
+			for(c = currentRun->startColumn; c <= currentRun->endColumn; c++) {
+				int r = currentRun->row;
+
+				//loop over color planes of pixel and create a histogram for each color
+				for(p = 0; p < NUM_COLORS; p++) {
+					Hist[data.u8TempImage[SENSORIMG][(r*nc+c)*NUM_COLORS+p]][p] +=1;
+				}
+
+			}currentRun = currentRun->next; //get net run of current object
+		} while(currentRun != NULL); //end of current object
+
+		// summing all values from each histogram
+		for(p = 1; p < NUM_COLORS; p++) {
+			for (int i = 0; i < 256; i++){
+				num[p] += i*Hist[i][p];
+			}
+		}
+
+		// save the corresponding color to the object
+		if ((num[1] > num[2])){ // this works! but why should it be "blue" when (green>blue) and "red" when (green<blue)
+			ObjectsColor[o] = BLUE;
+		} else{
+			ObjectsColor[o] = RED;
+		}
+
+		/*if (o == 1){
+			char Text1[34]; // "+ 2" for the "\n" end of line
+			sprintf(Text1, "%u", num[1]);
+			DrawString(10, 10, strlen(Text1), MEDIUMBOLD, GREEN, Text1);
+		}*/
+	}
+}
 
 void DrawBoundingBoxes() {
 	uint16 o;
+
+	uint8 ObjectsColor[ImgRegions.noOfObjects];
+	DetectObjectsColor(ObjectsColor);
+
 	for(o = 0; o < ImgRegions.noOfObjects; o++) {
+		uint8 color = ObjectsColor[o];
+
 		if(ImgRegions.objects[o].area > MinArea) {
 			DrawBoundingBox(ImgRegions.objects[o].bboxLeft, ImgRegions.objects[o].bboxTop,
-							ImgRegions.objects[o].bboxRight, ImgRegions.objects[o].bboxBottom, false, GREEN);
+							ImgRegions.objects[o].bboxRight, ImgRegions.objects[o].bboxBottom, false, color);
 
 			DrawLine(ImgRegions.objects[o].centroidX-SizeCross, ImgRegions.objects[o].centroidY,
-					 ImgRegions.objects[o].centroidX+SizeCross, ImgRegions.objects[o].centroidY, RED);
+					 ImgRegions.objects[o].centroidX+SizeCross, ImgRegions.objects[o].centroidY, color);
 			DrawLine(ImgRegions.objects[o].centroidX, ImgRegions.objects[o].centroidY-SizeCross,
-								 ImgRegions.objects[o].centroidX, ImgRegions.objects[o].centroidY+SizeCross, RED);
+								 ImgRegions.objects[o].centroidX, ImgRegions.objects[o].centroidY+SizeCross, color);
 
+			/*char Text1[32]; // does not work, cgi file creates an error
+			sprintf(Text1, "%u", o);
+			DrawString(ImgRegions.objects[o].centroidX+(SizeCross), ImgRegions.objects[o].centroidY+SizeCross, strlen(Text1), MEDIUMBOLD, GREEN, Text1);
+			*/
 		}
 	}
 }
